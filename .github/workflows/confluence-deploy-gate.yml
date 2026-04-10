@@ -1,0 +1,31 @@
+name: Confluence Deployment Doc Check
+
+on:
+  pull_request:
+    branches:
+      - main        # change to your production branch name
+      - production
+
+jobs:
+  check-confluence-doc:
+    name: Confluence Doc Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Confluence doc check
+        env:
+          CONFLUENCE_EMAIL:    ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_PAGE_ID:  ${{ secrets.CONFLUENCE_PAGE_ID }}
+          CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
+        run: python scripts/check_confluence_deploy_doc.py
