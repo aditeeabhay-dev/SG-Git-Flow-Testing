@@ -7,10 +7,7 @@ API_TOKEN      = os.environ['CONFLUENCE_API_TOKEN']
 
 # ── Edit this list to match your required doc sections ──
 REQUIRED_SECTIONS = [
-    'Deployment Checklist',
-    'Rollback Plan',
-    'Approver Sign-off',
-    'QA Sign-off',
+    'Section Testing and Approvals',
 ]
 
 def fetch_page():
