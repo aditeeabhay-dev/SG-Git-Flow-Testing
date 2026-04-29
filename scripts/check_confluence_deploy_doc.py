@@ -5,6 +5,7 @@ CONFLUENCE_BASE = os.environ['CONFLUENCE_BASE_URL']
 EMAIL           = os.environ['CONFLUENCE_EMAIL']
 API_TOKEN       = os.environ['CONFLUENCE_API_TOKEN']
 PR_BODY         = os.environ.get('PR_BODY', '')
+print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")  # prints first 200 chars
 
 # ── 1. Extract page ID from PR description ──
 match = re.search(r'/pages/(\d+)', PR_BODY)
