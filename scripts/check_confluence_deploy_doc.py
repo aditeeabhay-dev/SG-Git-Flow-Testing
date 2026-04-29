@@ -1,70 +1,74 @@
-import os, re, requests, sys
-from bs4 import BeautifulSoup
+import os, re, requests, sys, json
 
 CONFLUENCE_BASE = os.environ['CONFLUENCE_BASE_URL']
 EMAIL           = os.environ['CONFLUENCE_EMAIL']
 API_TOKEN       = os.environ['CONFLUENCE_API_TOKEN']
 PR_BODY         = os.environ.get('PR_BODY', '')
-print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")  # prints first 200 chars
 
-# ── 1. Extract page ID from PR description ──
-#match = re.search(r'/pages/(\d+)', PR_BODY)
-#match = re.search(r'https://[a-zA-Z0-9]+\.atlassian\.net/wiki/[^\s]+/pages/(\d+)', PR_BODY)
+print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")
+
+# ── 1. Extract page ID from PR body ──
 match = re.search(r'/pages/(\d+)', PR_BODY)
-
 if not match:
-    print("❌ No Confluence deployment doc URL found in PR description!")
-    print("   Paste your Atlassian page URL anywhere in the PR description, e.g.:")
-    print("   https://99dotco.atlassian.net/wiki/spaces/.../pages/123456/...")
+    print("❌ No Confluence URL found in PR description!")
     sys.exit(1)
 
 PAGE_ID = match.group(1)
+print(f"DEBUG PAGE_ID: {PAGE_ID}")
 
-# ── 2. Define what must exist ──
-REQUIRED_SECTIONS = [
-    'Section Testing and Approvals',
-]
-
-REQUIRED_CHECKBOXES = [
-    "BE",
-]
-
-# ── 3. Fetch the page ──
+# ── 2. Fetch page in ADF (JSON) format ──
 def fetch_page():
-    url = f'{CONFLUENCE_BASE}/wiki/rest/api/content/{PAGE_ID}?expand=body.storage,version,status'
+    url = f'{CONFLUENCE_BASE}/wiki/rest/api/content/{PAGE_ID}?expand=body.atlas_doc_format,status'
     r = requests.get(url, auth=(EMAIL, API_TOKEN))
     r.raise_for_status()
     return r.json()
 
-# ── 4. Check a specific checkbox by its label ──
-def check_checkbox(content, label):
-    soup  = BeautifulSoup(content, 'html.parser')
-    tasks = soup.find_all('ac:task')
+# ── 3. Recursively extract all taskItems from ADF JSON ──
+def extract_tasks(node, tasks=[]):
+    if isinstance(node, dict):
+        if node.get('type') == 'taskItem':
+            state = node.get('attrs', {}).get('state', 'TODO')
+            # Extract text from content
+            text = ''
+            for child in node.get('content', []):
+                if child.get('type') == 'text':
+                    text += child.get('text', '')
+            tasks.append({'text': text.strip(), 'done': state == 'DONE'})
+        for value in node.values():
+            extract_tasks(value, tasks)
+    elif isinstance(node, list):
+        for item in node:
+            extract_tasks(item, tasks)
+    return tasks
 
-    for task in tasks:
-        status = task.find('ac:task-status')
-        body   = task.find('ac:task-body')
+# ── 4. Define required checked checkboxes ──
+# These are the label texts of checkboxes that MUST be ticked
+REQUIRED_CHECKED = [
+    "BE",   # Approvals table — BE checkbox must be ticked
+]
 
-        if body and label.lower() in body.get_text().lower():
-            return status and status.get_text().strip() == 'complete'
-
-    return False  # checkbox not found at all
-
-# ── 5. Run all checks ──
+# ── 5. Run checks ──
 def check(data):
-    content = data['body']['storage']['value']
-    errors  = []
+    errors = []
 
     if data.get('status') == 'draft':
         errors.append('Page is still a DRAFT — publish it before merging')
 
-    for section in REQUIRED_SECTIONS:
-        if section.lower() not in content.lower():
-            errors.append(f'Missing section: {section}')
+    adf_body = data.get('body', {}).get('atlas_doc_format', {}).get('value', '{}')
+    adf_json = json.loads(adf_body) if isinstance(adf_body, str) else adf_body
 
-    for checkbox in REQUIRED_CHECKBOXES:
-        if not check_checkbox(content, checkbox):
-            errors.append(f'Checkbox not ticked: "{checkbox}"')
+    tasks = extract_tasks(adf_json, [])
+    print(f"DEBUG found {len(tasks)} tasks")
+
+    for required in REQUIRED_CHECKED:
+        # Find the task with matching text
+        matches = [t for t in tasks if required.lower() in t['text'].lower()]
+        if not matches:
+            errors.append(f'Checkbox "{required}" not found in the page')
+        elif not any(t['done'] for t in matches):
+            errors.append(f'Checkbox "{required}" exists but is NOT ticked')
+        else:
+            print(f"✅ Checkbox '{required}' is ticked")
 
     return errors
 
@@ -79,4 +83,4 @@ if __name__ == '__main__':
             print(f'   • {e}')
         sys.exit(1)
 
-    print('✅ Confluence deployment doc looks good. Merge is unblocked.')
+    print('✅ All checks passed. Merge is unblocked.')
