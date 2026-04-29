@@ -8,10 +8,13 @@ PR_BODY         = os.environ.get('PR_BODY', '')
 print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")  # prints first 200 chars
 
 # ── 1. Extract page ID from PR description ──
-match = re.search(r'/pages/(\d+)', PR_BODY)
+#match = re.search(r'/pages/(\d+)', PR_BODY)
+match = re.search(r'https://[a-zA-Z0-9]+\.atlassian\.net/wiki/[^\s]+/pages/(\d+)', PR_BODY)
+
 if not match:
-    print("❌ No Confluence link found in PR description!")
-    print("   Add a line like: Deployment Doc: https://yourcompany.atlassian.net/wiki/.../pages/123456")
+    print("❌ No Confluence deployment doc URL found in PR description!")
+    print("   Paste your Atlassian page URL anywhere in the PR description, e.g.:")
+    print("   https://99dotco.atlassian.net/wiki/spaces/.../pages/123456/...")
     sys.exit(1)
 
 PAGE_ID = match.group(1)
