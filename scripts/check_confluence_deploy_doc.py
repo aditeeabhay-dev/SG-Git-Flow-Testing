@@ -106,7 +106,7 @@ def check(data):
 
     print(f"DEBUG: Tasks found in Approvals table: {approval_tasks}")
 
-    REQUIRED_APPROVALS = ["BE"]  # add "FE", "QA" etc. when needed
+    REQUIRED_APPROVALS = ["FE"]  # add "FE", "QA" etc. when needed
 
     for platform in REQUIRED_APPROVALS:
         matches = [t for t in approval_tasks if t['text'].strip().lower() == platform.lower()]
