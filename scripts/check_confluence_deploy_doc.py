@@ -23,31 +23,72 @@ def fetch_page():
     r.raise_for_status()
     return r.json()
 
-# ── 3. Recursively extract all taskItems from ADF JSON ──
-def extract_tasks(node, tasks=[]):
+# ── 3. Helper: extract plain text from any ADF node ──
+def get_text(node):
+    text = ''
+    for child in node.get('content', []):
+        if child.get('type') == 'text':
+            text += child.get('text', '')
+        else:
+            text += get_text(child)
+    return text
+
+# ── 4. Helper: recursively extract all taskItems from a node ──
+def extract_tasks(node, tasks=None):
+    if tasks is None:
+        tasks = []
     if isinstance(node, dict):
         if node.get('type') == 'taskItem':
             state = node.get('attrs', {}).get('state', 'TODO')
-            # Extract text from content
-            text = ''
-            for child in node.get('content', []):
-                if child.get('type') == 'text':
-                    text += child.get('text', '')
-            tasks.append({'text': text.strip(), 'done': state == 'DONE'})
+            text = get_text(node).strip()
+            tasks.append({'text': text, 'done': state == 'DONE'})
         for value in node.values():
-            extract_tasks(value, tasks)
+            if isinstance(value, (dict, list)):
+                extract_tasks(value, tasks)
     elif isinstance(node, list):
         for item in node:
             extract_tasks(item, tasks)
     return tasks
 
-# ── 4. Define required checked checkboxes ──
-# These are the label texts of checkboxes that MUST be ticked
-REQUIRED_CHECKED = [
-    "BE",   # Approvals table — BE checkbox must be ticked
-]
+# ── 5. Navigate: Testing and Approvals → Approvals heading → table ──
+def find_approval_tasks(adf_json):
+    top_level = adf_json.get('content', [])
 
-# ── 5. Run checks ──
+    # Step 1: Find the 'Testing and Approvals' expand block
+    testing_section = None
+    for node in top_level:
+        if node.get('type') == 'expand':
+            title = node.get('attrs', {}).get('title', '')
+            if 'testing and approvals' in title.lower():
+                testing_section = node
+                break
+
+    if not testing_section:
+        return None, "Could not find 'Testing and Approvals' section"
+
+    # Step 2: Inside that section, find the 'Approvals' heading
+    section_content = testing_section.get('content', [])
+    capture_next_table = False
+
+    for node in section_content:
+        if node.get('type') == 'heading':
+            heading_text = get_text(node).strip()
+            if heading_text.lower() == 'approvals':
+                capture_next_table = True
+                continue
+
+        # Step 3: Grab the table immediately after that heading
+        if capture_next_table and node.get('type') == 'table':
+            tasks = extract_tasks(node)
+            return tasks, None
+
+        # Stop if we hit another heading before finding a table
+        if capture_next_table and node.get('type') == 'heading':
+            break
+
+    return None, "Could not find 'Approvals' table inside 'Testing and Approvals' section"
+
+# ── 6. Run all checks ──
 def check(data):
     errors = []
 
@@ -57,22 +98,28 @@ def check(data):
     adf_body = data.get('body', {}).get('atlas_doc_format', {}).get('value', '{}')
     adf_json = json.loads(adf_body) if isinstance(adf_body, str) else adf_body
 
-    tasks = extract_tasks(adf_json, [])
-    print(f"DEBUG found {len(tasks)} tasks")
+    approval_tasks, err = find_approval_tasks(adf_json)
 
-    for required in REQUIRED_CHECKED:
-        # Find the task with matching text
-        matches = [t for t in tasks if required.lower() in t['text'].lower()]
+    if err:
+        errors.append(f'Structure error: {err}')
+        return errors
+
+    print(f"DEBUG: Tasks found in Approvals table: {approval_tasks}")
+
+    REQUIRED_APPROVALS = ["BE"]  # add "FE", "QA" etc. when needed
+
+    for platform in REQUIRED_APPROVALS:
+        matches = [t for t in approval_tasks if t['text'].strip().lower() == platform.lower()]
         if not matches:
-            errors.append(f'Checkbox "{required}" not found in the page')
+            errors.append(f'Approvals table: "{platform}" checkbox not found')
         elif not any(t['done'] for t in matches):
-            errors.append(f'Checkbox "{required}" exists but is NOT ticked')
+            errors.append(f'Approvals table: "{platform}" is NOT ticked')
         else:
-            print(f"✅ Checkbox '{required}' is ticked")
+            print(f"✅ Approvals table: '{platform}' is ticked")
 
     return errors
 
-# ── 6. Main ──
+# ── 7. Main ──
 if __name__ == '__main__':
     data   = fetch_page()
     errors = check(data)
