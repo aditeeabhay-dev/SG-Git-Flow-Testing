@@ -9,7 +9,8 @@ print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")  # prints first 200 chars
 
 # ── 1. Extract page ID from PR description ──
 #match = re.search(r'/pages/(\d+)', PR_BODY)
-match = re.search(r'https://[a-zA-Z0-9]+\.atlassian\.net/wiki/[^\s]+/pages/(\d+)', PR_BODY)
+#match = re.search(r'https://[a-zA-Z0-9]+\.atlassian\.net/wiki/[^\s]+/pages/(\d+)', PR_BODY)
+match = re.search(r'/pages/(\d+)', PR_BODY)
 
 if not match:
     print("❌ No Confluence deployment doc URL found in PR description!")
