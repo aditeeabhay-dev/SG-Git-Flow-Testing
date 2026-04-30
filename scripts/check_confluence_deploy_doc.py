@@ -11,7 +11,7 @@ print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")
 
 # Only these GitHub usernames can use the bypass
 BYPASS_ALLOWED_USERS = [
-    "aditeeadbhay-dev",
+    "aditeeabhay-dev",
     "jane-doe",
     "engineering-lead",
 ]
