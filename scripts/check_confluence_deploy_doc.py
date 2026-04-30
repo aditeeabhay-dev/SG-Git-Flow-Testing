@@ -4,8 +4,26 @@ CONFLUENCE_BASE = os.environ['CONFLUENCE_BASE_URL']
 EMAIL           = os.environ['CONFLUENCE_EMAIL']
 API_TOKEN       = os.environ['CONFLUENCE_API_TOKEN']
 PR_BODY         = os.environ.get('PR_BODY', '')
+PR_AUTHOR       = os.environ.get('PR_AUTHOR', '').lower()
+BYPASS_KEYWORD  = "HOTFIX-BYPASS"
 
 print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")
+
+# Only these GitHub usernames can use the bypass
+BYPASS_ALLOWED_USERS = [
+    "aditeeadbhay-dev",
+    "jane-doe",
+    "engineering-lead",
+]
+
+if BYPASS_KEYWORD in PR_BODY.upper():
+    if PR_AUTHOR in [u.lower() for u in BYPASS_ALLOWED_USERS]:
+        print(f"⚠️  HOTFIX-BYPASS used by @{PR_AUTHOR} — skipping Confluence checks")
+        sys.exit(0)
+    else:
+        print(f"❌ HOTFIX-BYPASS keyword found but @{PR_AUTHOR} is not authorised to bypass")
+        print(f"   Authorised users: {', '.join(BYPASS_ALLOWED_USERS)}")
+        sys.exit(1)  # fails the check — bypass attempt is blocked and logged
 
 # ── 1. Extract page ID from PR body ──
 match = re.search(r'/pages/(\d+)', PR_BODY)
