@@ -6,15 +6,7 @@ API_TOKEN       = os.environ['CONFLUENCE_API_TOKEN']
 PR_BODY         = os.environ.get('PR_BODY', '')
 PR_AUTHOR       = os.environ.get('PR_AUTHOR', '').lower()
 BYPASS_KEYWORD  = "HOTFIX-BYPASS"
-
-print(f"DEBUG PR_BODY: '{PR_BODY[:200]}'")
-
-# Only these GitHub usernames can use the bypass
-BYPASS_ALLOWED_USERS = [
-    #"aditeeabhay-dev",
-    "jane-doe",
-    "engineering-lead",
-]
+BYPASS_ALLOWED_USERS = [u.strip().lower() for u in os.environ.get('BYPASS_ALLOWED_USERS', '').split(',')]
 
 if BYPASS_KEYWORD in PR_BODY.upper():
     if PR_AUTHOR in [u.lower() for u in BYPASS_ALLOWED_USERS]:
