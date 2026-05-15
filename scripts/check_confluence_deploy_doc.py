@@ -11,49 +11,65 @@ TRIGGERED_BY         = os.environ.get('TRIGGERED_BY', 'pull_request')
 COMMENT_BODY         = os.environ.get('COMMENT_BODY', '')
 COMMENT_AUTHOR       = os.environ.get('COMMENT_AUTHOR', '').lower()
 PR_NUMBER            = os.environ.get('PR_NUMBER', '')
+PR_SHA               = os.environ.get('PR_SHA', '')
 GITHUB_TOKEN         = os.environ.get('GITHUB_TOKEN', '')
 REPO_FULL_NAME       = os.environ.get('REPO_FULL_NAME', '')
 BYPASS_KEYWORD       = "HOTFIX-BYPASS"
-TRIGGER_KEYWORD      = "!rerun-gate"
 
 raw_bypass           = os.environ.get('BYPASS_ALLOWED_USERS', '[]')
-
-# debug lines to know from where the trigger comes
-print(f"DEBUG TRIGGERED_BY: '{TRIGGERED_BY}'")
-print(f"DEBUG COMMENT_BODY: '{COMMENT_BODY[:200]}'")
-
 try:
     BYPASS_ALLOWED_USERS = [u.strip().lower() for u in json.loads(raw_bypass)]
 except json.JSONDecodeError:
     BYPASS_ALLOWED_USERS = [u.strip().lower() for u in raw_bypass.split(',')]
 
-# ── Determine source of truth ──
-# If triggered by comment, read from comment only
-# If triggered by PR open/rerun, read from PR description
+# ── Determine source ──
 if TRIGGERED_BY == 'issue_comment':
-    SOURCE       = 'comment'
-    SOURCE_TEXT  = COMMENT_BODY
-    ACTOR        = COMMENT_AUTHOR
+    SOURCE      = 'comment'
+    SOURCE_TEXT = COMMENT_BODY
+    ACTOR       = COMMENT_AUTHOR
 else:
-    SOURCE       = 'description'
-    SOURCE_TEXT  = PR_BODY
-    ACTOR        = PR_AUTHOR
+    SOURCE      = 'description'
+    SOURCE_TEXT = PR_BODY
+    ACTOR       = PR_AUTHOR
 
 TIMESTAMP = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
-# ── Post summary comment back to PR ──
+# ── Post summary comment to PR ──
 def post_comment(body):
     if not GITHUB_TOKEN or not PR_NUMBER or not REPO_FULL_NAME:
-        print("Skipping summary comment — missing GITHUB_TOKEN, PR_NUMBER or REPO_FULL_NAME")
+        print("Skipping summary comment — missing token, PR number or repo name")
         return
     url = f"https://api.github.com/repos/{REPO_FULL_NAME}/issues/{PR_NUMBER}/comments"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json"
     }
-    requests.post(url, headers=headers, json={"body": body})
+    r = requests.post(url, headers=headers, json={"body": body})
+    print(f"Summary comment posted: {r.status_code}")
 
-# ── Comment trigger: verify it was posted by PR owner only ──
+# ── Create check run on PR head commit (required to unlock merge button from comment trigger) ──
+def create_check_run(conclusion, title, summary):
+    if TRIGGERED_BY != 'issue_comment' or not PR_SHA:
+        return  # Only needed for comment triggers — pull_request trigger creates its own check run
+    url = f"https://api.github.com/repos/{REPO_FULL_NAME}/check-runs"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    payload = {
+        "name": "Confluence Doc Gate",
+        "head_sha": PR_SHA,
+        "status": "completed",
+        "conclusion": conclusion,  # "success" or "failure"
+        "output": {
+            "title": title,
+            "summary": summary
+        }
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    print(f"Check run created on commit {PR_SHA[:7]}: {r.status_code}")
+
+# ── Comment trigger: verify PR owner only ──
 if TRIGGERED_BY == 'issue_comment':
     if COMMENT_AUTHOR != PR_AUTHOR:
         msg = (
@@ -63,6 +79,7 @@ if TRIGGERED_BY == 'issue_comment':
             f"*No checks were run.*"
         )
         post_comment(msg)
+        create_check_run("failure", "Unauthorised trigger", f"@{COMMENT_AUTHOR} is not the PR owner")
         print(f"Trigger rejected — comment by @{COMMENT_AUTHOR}, PR owner is @{PR_AUTHOR}")
         sys.exit(1)
 
@@ -78,6 +95,7 @@ if BYPASS_KEYWORD in SOURCE_TEXT.upper():
             f"*Confluence checks were skipped. This bypass is permanently recorded.*"
         )
         post_comment(msg)
+        create_check_run("success", "Bypassed via HOTFIX-BYPASS", f"Bypass authorised by @{ACTOR} at {TIMESTAMP}")
         print(f"HOTFIX-BYPASS used by @{ACTOR} via {SOURCE} — skipping Confluence checks")
         sys.exit(0)
     else:
@@ -88,6 +106,7 @@ if BYPASS_KEYWORD in SOURCE_TEXT.upper():
             f"*Contact your engineering lead to be added to the authorised bypass list.*"
         )
         post_comment(msg)
+        create_check_run("failure", "Unauthorised bypass attempt", f"@{ACTOR} is not in the authorised bypass list")
         print(f"HOTFIX-BYPASS attempted by @{ACTOR} via {SOURCE} — not authorised")
         sys.exit(1)
 
@@ -99,15 +118,16 @@ if not match:
         f"**Triggered by:** {SOURCE}\n"
         f"**Issues found:**\n"
         f"- ❌ No Confluence deployment doc URL found in {SOURCE}\n\n"
-        f"*Paste your Confluence page URL in the PR description or in a `!rerun-gate` comment, then rerun.*"
+        f"*Paste your Confluence page URL in the PR description or post a `!rerun-gate` comment with the URL.*"
     )
     post_comment(msg)
+    create_check_run("failure", "No Confluence URL found", f"No Confluence URL found in {SOURCE}")
     print(f"No Confluence URL found in {SOURCE}")
     sys.exit(1)
 
 PAGE_ID = match.group(1)
-CONFLUENCE_URL = re.search(r'https://[^\s]+/pages/\d+[^\s]*', SOURCE_TEXT)
-CONFLUENCE_URL = CONFLUENCE_URL.group(0) if CONFLUENCE_URL else f"Page ID: {PAGE_ID}"
+confluence_url_match = re.search(r'https://[^\s]+/pages/\d+[^\s]*', SOURCE_TEXT)
+CONFLUENCE_URL = confluence_url_match.group(0) if confluence_url_match else f"Page ID: {PAGE_ID}"
 
 # ── Fetch Confluence page ──
 def fetch_page():
@@ -170,20 +190,15 @@ def find_approval_tasks(adf_json):
 def check(data):
     errors  = []
     passing = []
-
     if data.get('status') == 'draft':
         errors.append('Page is still a DRAFT — publish it before merging')
-
     adf_body = data.get('body', {}).get('atlas_doc_format', {}).get('value', '{}')
     adf_json = json.loads(adf_body) if isinstance(adf_body, str) else adf_body
-
     approval_tasks, err = find_approval_tasks(adf_json)
     if err:
         errors.append(f'Structure error: {err}')
         return errors, passing
-
     REQUIRED_APPROVALS = ["BE", "QA"]
-
     for platform in REQUIRED_APPROVALS:
         matches = [t for t in approval_tasks if t['text'].strip().lower() == platform.lower()]
         if not matches:
@@ -192,12 +207,11 @@ def check(data):
             errors.append(f'"{platform}" approval is NOT ticked')
         else:
             passing.append(f'"{platform}" approval ticked')
-
     return errors, passing
 
 # ── Main ──
 if __name__ == '__main__':
-    data           = fetch_page()
+    data            = fetch_page()
     errors, passing = check(data)
 
     check_lines = ""
@@ -212,9 +226,10 @@ if __name__ == '__main__':
             f"**Triggered by:** {SOURCE} by @{ACTOR}\n"
             f"**Confluence doc:** {CONFLUENCE_URL}\n"
             f"**Checks:**\n{check_lines}\n"
-            f"*Fix the above, then post `!rerun-gate` as a comment to rerun.*"
+            f"*Fix the above, then post `!rerun-gate` with your Confluence URL as a comment to rerun.*"
         )
         post_comment(msg)
+        create_check_run("failure", "Confluence doc checks failed", check_lines)
         print('Confluence deployment doc check FAILED:')
         for e in errors:
             print(f'  - {e}')
@@ -228,4 +243,5 @@ if __name__ == '__main__':
         f"*Merge is unblocked.*"
     )
     post_comment(msg)
+    create_check_run("success", "All Confluence doc checks passed", check_lines)
     print('All checks passed. Merge is unblocked.')
