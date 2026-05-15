@@ -46,6 +46,10 @@ jobs:
           PR_SHA=$(echo "$PR_DATA" | python3 -c "import sys,json; print(json.load(sys.stdin)['head']['sha'])")
           echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
           echo "pr_sha=$PR_SHA" >> $GITHUB_OUTPUT
+          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
+          echo "pr_sha=$PR_SHA" >> $GITHUB_OUTPUT
+          echo "DEBUG pr_author=$PR_AUTHOR"
+          echo "DEBUG pr_sha=$PR_SHA"
 
       - name: Run Confluence doc check
         env:
