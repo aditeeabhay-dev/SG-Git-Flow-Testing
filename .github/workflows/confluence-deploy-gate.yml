@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   check-confluence-doc:
-    name: Confluence Doc Gate
+    name: Run Confluence Gate Script   # ← change from "Confluence Doc Gate"
     runs-on: ubuntu-latest
 
     if: |
