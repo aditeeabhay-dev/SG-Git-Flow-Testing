@@ -11,6 +11,7 @@ permissions:
   checks: write
   pull-requests: write
   issues: write
+  statuses: write
 
 jobs:
   check-confluence-doc:
@@ -46,10 +47,6 @@ jobs:
           PR_SHA=$(echo "$PR_DATA" | python3 -c "import sys,json; print(json.load(sys.stdin)['head']['sha'])")
           echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
           echo "pr_sha=$PR_SHA" >> $GITHUB_OUTPUT
-          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
-          echo "pr_sha=$PR_SHA" >> $GITHUB_OUTPUT
-          echo "DEBUG pr_author=$PR_AUTHOR"
-          echo "DEBUG pr_sha=$PR_SHA"
 
       - name: Run Confluence doc check
         env:
@@ -62,11 +59,14 @@ jobs:
           COMMENT_BODY:          ${{ github.event.comment.body }}
           COMMENT_AUTHOR:        ${{ github.event.comment.user.login }}
           PR_NUMBER:             ${{ github.event.issue.number || github.event.pull_request.number }}
-          PR_SHA:                ${{ steps.pr_info.outputs.pr_sha }}
           GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
           REPO_FULL_NAME:        ${{ github.repository }}
           PR_AUTHOR: >-
             ${{ github.event_name == 'issue_comment'
               && steps.pr_info.outputs.pr_author
               || github.event.pull_request.user.login }}
+          PR_SHA: >-
+            ${{ github.event_name == 'issue_comment'
+              && steps.pr_info.outputs.pr_sha
+              || github.event.pull_request.head.sha }}
         run: python scripts/check_confluence_deploy_doc.py
