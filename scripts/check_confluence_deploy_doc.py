@@ -1,39 +1,117 @@
 import os, re, requests, sys, json
+from datetime import datetime, timezone
 
-CONFLUENCE_BASE = os.environ['CONFLUENCE_BASE_URL']
-EMAIL           = os.environ['CONFLUENCE_EMAIL']
-API_TOKEN       = os.environ['CONFLUENCE_API_TOKEN']
-PR_BODY         = os.environ.get('PR_BODY', '')
-PR_AUTHOR       = os.environ.get('PR_AUTHOR', '').lower()
-BYPASS_KEYWORD  = "HOTFIX-BYPASS"
-BYPASS_ALLOWED_USERS = [u.strip().lower() for u in os.environ.get('BYPASS_ALLOWED_USERS', '').split(',')]
+# ── Environment variables ──
+CONFLUENCE_BASE      = os.environ['CONFLUENCE_BASE_URL']
+EMAIL                = os.environ['CONFLUENCE_EMAIL']
+API_TOKEN            = os.environ['CONFLUENCE_API_TOKEN']
+PR_BODY              = os.environ.get('PR_BODY', '')
+PR_AUTHOR            = os.environ.get('PR_AUTHOR', '').lower()
+TRIGGERED_BY         = os.environ.get('TRIGGERED_BY', 'pull_request')
+COMMENT_BODY         = os.environ.get('COMMENT_BODY', '')
+COMMENT_AUTHOR       = os.environ.get('COMMENT_AUTHOR', '').lower()
+PR_NUMBER            = os.environ.get('PR_NUMBER', '')
+GITHUB_TOKEN         = os.environ.get('GITHUB_TOKEN', '')
+REPO_FULL_NAME       = os.environ.get('REPO_FULL_NAME', '')
+BYPASS_KEYWORD       = "HOTFIX-BYPASS"
+TRIGGER_KEYWORD      = "!rerun-gate"
 
-if BYPASS_KEYWORD in PR_BODY.upper():
-    if PR_AUTHOR in [u.lower() for u in BYPASS_ALLOWED_USERS]:
-        print(f"⚠️  HOTFIX-BYPASS used by @{PR_AUTHOR} — skipping Confluence checks")
+raw_bypass           = os.environ.get('BYPASS_ALLOWED_USERS', '[]')
+try:
+    BYPASS_ALLOWED_USERS = [u.strip().lower() for u in json.loads(raw_bypass)]
+except json.JSONDecodeError:
+    BYPASS_ALLOWED_USERS = [u.strip().lower() for u in raw_bypass.split(',')]
+
+# ── Determine source of truth ──
+# If triggered by comment, read from comment only
+# If triggered by PR open/rerun, read from PR description
+if TRIGGERED_BY == 'issue_comment':
+    SOURCE       = 'comment'
+    SOURCE_TEXT  = COMMENT_BODY
+    ACTOR        = COMMENT_AUTHOR
+else:
+    SOURCE       = 'description'
+    SOURCE_TEXT  = PR_BODY
+    ACTOR        = PR_AUTHOR
+
+TIMESTAMP = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+# ── Post summary comment back to PR ──
+def post_comment(body):
+    if not GITHUB_TOKEN or not PR_NUMBER or not REPO_FULL_NAME:
+        print("Skipping summary comment — missing GITHUB_TOKEN, PR_NUMBER or REPO_FULL_NAME")
+        return
+    url = f"https://api.github.com/repos/{REPO_FULL_NAME}/issues/{PR_NUMBER}/comments"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    requests.post(url, headers=headers, json={"body": body})
+
+# ── Comment trigger: verify it was posted by PR owner only ──
+if TRIGGERED_BY == 'issue_comment':
+    if COMMENT_AUTHOR != PR_AUTHOR:
+        msg = (
+            f"🤖 **Confluence Doc Gate — UNAUTHORISED TRIGGER** ❌\n\n"
+            f"**@{COMMENT_AUTHOR}** posted `!rerun-gate` but only the PR owner "
+            f"**@{PR_AUTHOR}** can trigger this.\n\n"
+            f"*No checks were run.*"
+        )
+        post_comment(msg)
+        print(f"Trigger rejected — comment by @{COMMENT_AUTHOR}, PR owner is @{PR_AUTHOR}")
+        sys.exit(1)
+
+# ── Hotfix bypass check ──
+if BYPASS_KEYWORD in SOURCE_TEXT.upper():
+    if ACTOR in BYPASS_ALLOWED_USERS:
+        msg = (
+            f"🤖 **Confluence Doc Gate — BYPASSED** ⚠️\n\n"
+            f"**Triggered by:** {SOURCE} by @{ACTOR}\n"
+            f"**Bypass keyword:** `HOTFIX-BYPASS`\n"
+            f"**Authorised by:** @{ACTOR}\n"
+            f"**Time:** {TIMESTAMP}\n\n"
+            f"*Confluence checks were skipped. This bypass is permanently recorded.*"
+        )
+        post_comment(msg)
+        print(f"HOTFIX-BYPASS used by @{ACTOR} via {SOURCE} — skipping Confluence checks")
         sys.exit(0)
     else:
-        print(f"❌ HOTFIX-BYPASS keyword found but @{PR_AUTHOR} is not authorised to bypass")
-        print(f"   Authorised users: {', '.join(BYPASS_ALLOWED_USERS)}")
-        sys.exit(1)  # fails the check — bypass attempt is blocked and logged
+        msg = (
+            f"🤖 **Confluence Doc Gate — FAILED** ❌\n\n"
+            f"**Triggered by:** {SOURCE} by @{ACTOR}\n"
+            f"`HOTFIX-BYPASS` keyword found but **@{ACTOR}** is not authorised to bypass.\n\n"
+            f"*Contact your engineering lead to be added to the authorised bypass list.*"
+        )
+        post_comment(msg)
+        print(f"HOTFIX-BYPASS attempted by @{ACTOR} via {SOURCE} — not authorised")
+        sys.exit(1)
 
-# ── 1. Extract page ID from PR body ──
-match = re.search(r'/pages/(\d+)', PR_BODY)
+# ── Extract Confluence page ID ──
+match = re.search(r'/pages/(\d+)', SOURCE_TEXT)
 if not match:
-    print("❌ No Confluence URL found in PR description!")
+    msg = (
+        f"🤖 **Confluence Doc Gate — FAILED** ❌\n\n"
+        f"**Triggered by:** {SOURCE}\n"
+        f"**Issues found:**\n"
+        f"- ❌ No Confluence deployment doc URL found in {SOURCE}\n\n"
+        f"*Paste your Confluence page URL in the PR description or in a `!rerun-gate` comment, then rerun.*"
+    )
+    post_comment(msg)
+    print(f"No Confluence URL found in {SOURCE}")
     sys.exit(1)
 
 PAGE_ID = match.group(1)
-print(f"DEBUG PAGE_ID: {PAGE_ID}")
+CONFLUENCE_URL = re.search(r'https://[^\s]+/pages/\d+[^\s]*', SOURCE_TEXT)
+CONFLUENCE_URL = CONFLUENCE_URL.group(0) if CONFLUENCE_URL else f"Page ID: {PAGE_ID}"
 
-# ── 2. Fetch page in ADF (JSON) format ──
+# ── Fetch Confluence page ──
 def fetch_page():
     url = f'{CONFLUENCE_BASE}/wiki/rest/api/content/{PAGE_ID}?expand=body.atlas_doc_format,status'
     r = requests.get(url, auth=(EMAIL, API_TOKEN))
     r.raise_for_status()
     return r.json()
 
-# ── 3. Helper: extract plain text from any ADF node ──
+# ── ADF helpers ──
 def get_text(node):
     text = ''
     for child in node.get('content', []):
@@ -43,14 +121,13 @@ def get_text(node):
             text += get_text(child)
     return text
 
-# ── 4. Helper: recursively extract all taskItems from a node ──
 def extract_tasks(node, tasks=None):
     if tasks is None:
         tasks = []
     if isinstance(node, dict):
         if node.get('type') == 'taskItem':
             state = node.get('attrs', {}).get('state', 'TODO')
-            text = get_text(node).strip()
+            text  = get_text(node).strip()
             tasks.append({'text': text, 'done': state == 'DONE'})
         for value in node.values():
             if isinstance(value, (dict, list)):
@@ -60,11 +137,8 @@ def extract_tasks(node, tasks=None):
             extract_tasks(item, tasks)
     return tasks
 
-# ── 5. Navigate: Testing and Approvals → Approvals heading → table ──
 def find_approval_tasks(adf_json):
     top_level = adf_json.get('content', [])
-
-    # Step 1: Find the 'Testing and Approvals' expand block
     testing_section = None
     for node in top_level:
         if node.get('type') == 'expand':
@@ -72,35 +146,25 @@ def find_approval_tasks(adf_json):
             if 'testing and approvals' in title.lower():
                 testing_section = node
                 break
-
     if not testing_section:
         return None, "Could not find 'Testing and Approvals' section"
-
-    # Step 2: Inside that section, find the 'Approvals' heading
-    section_content = testing_section.get('content', [])
+    section_content    = testing_section.get('content', [])
     capture_next_table = False
-
     for node in section_content:
         if node.get('type') == 'heading':
-            heading_text = get_text(node).strip()
-            if heading_text.lower() == 'approvals':
+            if get_text(node).strip().lower() == 'approvals':
                 capture_next_table = True
                 continue
-
-        # Step 3: Grab the table immediately after that heading
         if capture_next_table and node.get('type') == 'table':
-            tasks = extract_tasks(node)
-            return tasks, None
-
-        # Stop if we hit another heading before finding a table
+            return extract_tasks(node), None
         if capture_next_table and node.get('type') == 'heading':
             break
-
     return None, "Could not find 'Approvals' table inside 'Testing and Approvals' section"
 
-# ── 6. Run all checks ──
+# ── Run checks ──
 def check(data):
-    errors = []
+    errors  = []
+    passing = []
 
     if data.get('status') == 'draft':
         errors.append('Page is still a DRAFT — publish it before merging')
@@ -109,35 +173,54 @@ def check(data):
     adf_json = json.loads(adf_body) if isinstance(adf_body, str) else adf_body
 
     approval_tasks, err = find_approval_tasks(adf_json)
-
     if err:
         errors.append(f'Structure error: {err}')
-        return errors
+        return errors, passing
 
-    print(f"DEBUG: Tasks found in Approvals table: {approval_tasks}")
-
-    REQUIRED_APPROVALS = ["BE", "QA"]  # add "FE", "QA" etc. when needed
+    REQUIRED_APPROVALS = ["BE", "QA"]
 
     for platform in REQUIRED_APPROVALS:
         matches = [t for t in approval_tasks if t['text'].strip().lower() == platform.lower()]
         if not matches:
-            errors.append(f'Approvals table: "{platform}" checkbox not found')
+            errors.append(f'"{platform}" checkbox not found in Approvals table')
         elif not any(t['done'] for t in matches):
-            errors.append(f'Approvals table: "{platform}" is NOT ticked')
+            errors.append(f'"{platform}" approval is NOT ticked')
         else:
-            print(f"✅ Approvals table: '{platform}' is ticked")
+            passing.append(f'"{platform}" approval ticked')
 
-    return errors
+    return errors, passing
 
-# ── 7. Main ──
+# ── Main ──
 if __name__ == '__main__':
-    data   = fetch_page()
-    errors = check(data)
+    data           = fetch_page()
+    errors, passing = check(data)
+
+    check_lines = ""
+    for p in passing:
+        check_lines += f"- ✅ {p}\n"
+    for e in errors:
+        check_lines += f"- ❌ {e}\n"
 
     if errors:
-        print('\n❌ Confluence deployment doc check FAILED:')
+        msg = (
+            f"🤖 **Confluence Doc Gate — FAILED** ❌\n\n"
+            f"**Triggered by:** {SOURCE} by @{ACTOR}\n"
+            f"**Confluence doc:** {CONFLUENCE_URL}\n"
+            f"**Checks:**\n{check_lines}\n"
+            f"*Fix the above, then post `!rerun-gate` as a comment to rerun.*"
+        )
+        post_comment(msg)
+        print('Confluence deployment doc check FAILED:')
         for e in errors:
-            print(f'   • {e}')
+            print(f'  - {e}')
         sys.exit(1)
 
-    print('✅ All checks passed. Merge is unblocked.')
+    msg = (
+        f"🤖 **Confluence Doc Gate — PASSED** ✅\n\n"
+        f"**Triggered by:** {SOURCE} by @{ACTOR}\n"
+        f"**Confluence doc:** {CONFLUENCE_URL}\n"
+        f"**Checks:**\n{check_lines}\n"
+        f"*Merge is unblocked.*"
+    )
+    post_comment(msg)
+    print('All checks passed. Merge is unblocked.')
