@@ -17,6 +17,11 @@ BYPASS_KEYWORD       = "HOTFIX-BYPASS"
 TRIGGER_KEYWORD      = "!rerun-gate"
 
 raw_bypass           = os.environ.get('BYPASS_ALLOWED_USERS', '[]')
+
+# debug lines to know from where the trigger comes
+print(f"DEBUG TRIGGERED_BY: '{TRIGGERED_BY}'")
+print(f"DEBUG COMMENT_BODY: '{COMMENT_BODY[:200]}'")
+
 try:
     BYPASS_ALLOWED_USERS = [u.strip().lower() for u in json.loads(raw_bypass)]
 except json.JSONDecodeError:
