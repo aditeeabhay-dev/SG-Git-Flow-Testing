@@ -49,7 +49,12 @@ def post_comment(body):
 
 # ── Create check run on PR head commit (required to unlock merge button from comment trigger) ──
 def create_check_run(conclusion, title, summary):
+    print(f"DEBUG create_check_run: TRIGGERED_BY='{TRIGGERED_BY}'")
+    print(f"DEBUG create_check_run: PR_SHA='{PR_SHA}'")
+    print(f"DEBUG create_check_run: REPO_FULL_NAME='{REPO_FULL_NAME}'")
+    
     if TRIGGERED_BY != 'issue_comment' or not PR_SHA:
+        print(f"DEBUG: Early return — triggered_by check: {TRIGGERED_BY != 'issue_comment'}, sha empty: {not PR_SHA}")
         return
 
     headers = {
