@@ -7,6 +7,11 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  checks: write
+  pull-requests: write
+  issues: write
+
 jobs:
   check-confluence-doc:
     name: Confluence Doc Gate
@@ -29,16 +34,18 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4
 
-      - name: Get PR author for comment trigger
+      - name: Get PR info for comment trigger
         if: github.event_name == 'issue_comment'
         id: pr_info
         run: |
-          PR_AUTHOR=$(curl -s \
+          PR_DATA=$(curl -s \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}" \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['login'])")
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}")
+          PR_AUTHOR=$(echo "$PR_DATA" | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['login'])")
+          PR_SHA=$(echo "$PR_DATA" | python3 -c "import sys,json; print(json.load(sys.stdin)['head']['sha'])")
           echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
+          echo "pr_sha=$PR_SHA" >> $GITHUB_OUTPUT
 
       - name: Run Confluence doc check
         env:
@@ -51,6 +58,7 @@ jobs:
           COMMENT_BODY:          ${{ github.event.comment.body }}
           COMMENT_AUTHOR:        ${{ github.event.comment.user.login }}
           PR_NUMBER:             ${{ github.event.issue.number || github.event.pull_request.number }}
+          PR_SHA:                ${{ steps.pr_info.outputs.pr_sha }}
           GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
           REPO_FULL_NAME:        ${{ github.repository }}
           PR_AUTHOR: >-
