@@ -50,24 +50,40 @@ def post_comment(body):
 # ── Create check run on PR head commit (required to unlock merge button from comment trigger) ──
 def create_check_run(conclusion, title, summary):
     if TRIGGERED_BY != 'issue_comment' or not PR_SHA:
-        return  # Only needed for comment triggers — pull_request trigger creates its own check run
-    url = f"https://api.github.com/repos/{REPO_FULL_NAME}/check-runs"
+        return
+
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json"
     }
-    payload = {
-        "name": "Confluence Doc Gate",
-        "head_sha": PR_SHA,
-        "status": "completed",
-        "conclusion": conclusion,  # "success" or "failure"
-        "output": {
-            "title": title,
-            "summary": summary
-        }
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print(f"Check run created on commit {PR_SHA[:7]}: {r.status_code}")
+
+    # Find the existing failing check run and update it
+    # rather than creating a new one (which causes two checks to appear)
+    list_url = f"https://api.github.com/repos/{REPO_FULL_NAME}/commits/{PR_SHA}/check-runs"
+    r = requests.get(list_url, headers=headers, params={"check_name": "Confluence Doc Gate"})
+    check_runs = r.json().get('check_runs', [])
+
+    if check_runs:
+        # Update the most recent existing check run
+        check_run_id = check_runs[-1]['id']
+        update_url = f"https://api.github.com/repos/{REPO_FULL_NAME}/check-runs/{check_run_id}"
+        r = requests.patch(update_url, headers=headers, json={
+            "status": "completed",
+            "conclusion": conclusion,
+            "output": {"title": title, "summary": summary}
+        })
+        print(f"Check run {check_run_id} updated to '{conclusion}': {r.status_code}")
+    else:
+        # No existing check run found — create a new one
+        create_url = f"https://api.github.com/repos/{REPO_FULL_NAME}/check-runs"
+        r = requests.post(create_url, headers=headers, json={
+            "name": "Confluence Doc Gate",
+            "head_sha": PR_SHA,
+            "status": "completed",
+            "conclusion": conclusion,
+            "output": {"title": title, "summary": summary}
+        })
+        print(f"Check run created with '{conclusion}': {r.status_code}")
 
 # ── Comment trigger: verify PR owner only ──
 if TRIGGERED_BY == 'issue_comment':
