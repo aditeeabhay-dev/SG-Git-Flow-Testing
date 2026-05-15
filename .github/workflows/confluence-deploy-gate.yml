@@ -3,13 +3,21 @@ name: Confluence Deployment Doc Check
 on:
   pull_request:
     branches:
-      - main        # change to your production branch name
-      - production
+      - main
+  issue_comment:
+    types: [created]
 
 jobs:
   check-confluence-doc:
     name: Confluence Doc Gate
     runs-on: ubuntu-latest
+
+    # For comment trigger — only run if comment is on a PR and contains !rerun-gate
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '!rerun-gate'))
 
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +32,17 @@ jobs:
 
       - name: Run Confluence doc check
         env:
-          CONFLUENCE_EMAIL:     ${{ secrets.CONFLUENCE_EMAIL }}
-          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
-          CONFLUENCE_BASE_URL:  ${{ secrets.CONFLUENCE_BASE_URL }}
-          BYPASS_ALLOWED_USERS: ${{ secrets.BYPASS_ALLOWED_USERS }}
-          PR_BODY:              ${{ github.event.pull_request.body }}
-          PR_AUTHOR:            ${{ github.event.pull_request.user.login }}
-
+          CONFLUENCE_EMAIL:      ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN:  ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_BASE_URL:   ${{ secrets.CONFLUENCE_BASE_URL }}
+          BYPASS_ALLOWED_USERS:  ${{ secrets.BYPASS_ALLOWED_USERS }}
+          PR_BODY:               ${{ github.event.pull_request.body }}
+          PR_AUTHOR:             ${{ github.event.pull_request.user.login }}
+          # Comment-specific variables — only populated on issue_comment trigger
+          TRIGGERED_BY:          ${{ github.event_name }}
+          COMMENT_BODY:          ${{ github.event.comment.body }}
+          COMMENT_AUTHOR:        ${{ github.event.comment.user.login }}
+          PR_NUMBER:             ${{ github.event.issue.number || github.event.pull_request.number }}
+          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
+          REPO_FULL_NAME:        ${{ github.repository }}
         run: python scripts/check_confluence_deploy_doc.py
