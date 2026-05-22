@@ -2,12 +2,15 @@ name: Confluence Deployment Doc Check
 
 on:
   pull_request:
+    types: [opened, reopened, ready_for_review]
     branches:
+      - master
       - main
   issue_comment:
     types: [created]
 
 permissions:
+  contents: read
   checks: write
   pull-requests: write
   issues: write
@@ -15,8 +18,12 @@ permissions:
 
 jobs:
   check-confluence-doc:
-    name: Run Confluence Gate Script   # ← change from "Confluence Doc Gate"
+    name: Run Confluence Gate Script
     runs-on: ubuntu-latest
+
+    concurrency:
+      group: confluence-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
 
     if: |
       github.event_name == 'pull_request' ||
